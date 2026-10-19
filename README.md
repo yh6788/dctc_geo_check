@@ -141,6 +141,8 @@
 - Python 3.8+
 - **仅标准库**（无需 requests、BeautifulSoup、lxml）
 - 只发 HTTP GET，不写对方站点、不改对方数据库
+- 源码注释与 docstring 为英文；命令行 Markdown 报告默认中文（与官网中文站一致）
+- 请勿提交 `site_profiles.local.json`、`.geo_new_session`（已列入 `.gitignore`）
 
 ```bash
 # 检测单个站点
@@ -308,6 +310,8 @@ Full scoring copy on the site: [Scoring (en)](https://www.geohttp.com/en/method)
 - Python 3.8+
 - **Standard library only** (no requests, BeautifulSoup, or lxml)
 - HTTP GET only — does not write the target site or its database
+- Source comments/docstrings are in English; the default Markdown report is Chinese (same as the zh site)
+- Do not commit `site_profiles.local.json` or `.geo_new_session` (listed in `.gitignore`)
 
 ```bash
 # Audit one site
