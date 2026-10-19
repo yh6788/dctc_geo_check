@@ -1,5 +1,15 @@
 # dctc_geo_check
 
+**[中文](#中文)** · **[English](#english)**
+
+网站 GEO 自动体检核心算法 · Core algorithm for generative-engine (GEO) citation readiness audits.
+
+线上服务 / Live service: **[https://www.geohttp.com](https://www.geohttp.com)**（GEO库 / GEO Cool）
+
+---
+
+# 中文
+
 网站 GEO（生成式引擎优化）自动体检：检查公开网页是否容易被 AI 爬虫抓取、理解并引用。
 
 ## 在线体验（推荐）
@@ -18,10 +28,9 @@
 
 - 英文镜像：[https://www.geohttp.com/en](https://www.geohttp.com/en)
 - 计分方法：[https://www.geohttp.com/method](https://www.geohttp.com/method)
+- 英文计分说明：[https://www.geohttp.com/en/method](https://www.geohttp.com/en/method)
 
 本仓库中的 `03-geo_check.py`，就是 [geohttp.com](https://www.geohttp.com) 线上体检实际调用的判定逻辑（五轴 v11）。
-
----
 
 ## 五轴评分体系（合计 100）
 
@@ -85,8 +94,6 @@
 | 压缩 | 2 | gzip 或 brotli |
 | HTTP/2 | 1 | 协议版本为 HTTP/2 |
 
----
-
 ## 微调、封顶与分档
 
 | 规则 | 说明 |
@@ -98,8 +105,6 @@
 | 无法判定 | 超时、连接失败 → unknown，不按 0 分进分子，只拉低置信度 |
 
 分档：90+ 优秀 · 75–89 良好 · 50–74 及格 · 低于 50 待整改。
-
----
 
 ## 多维度检测（不止计分行）
 
@@ -131,8 +136,6 @@
 
 更完整的口径说明见官网：[计分方法](https://www.geohttp.com/method) · [文章](https://www.geohttp.com/articles)
 
----
-
 ## 要求与用法
 
 - Python 3.8+
@@ -152,8 +155,6 @@ python3 03-geo_check.py --site https://www.example.com/ --out report.md
 
 退出码：`0` 正常；`2` 存在 P0 问题（便于 cron / CI）。
 
----
-
 ## 与官网的关系
 
 | | 说明 |
@@ -163,6 +164,168 @@ python3 03-geo_check.py --site https://www.example.com/ --out report.md
 
 想先看结果：直接打开 **[geohttp.com](https://www.geohttp.com)**。要本地复现或接入脚本：用本仓库。
 
-## License
+## 许可证
 
 GNU Affero General Public License v3.0（AGPL-3.0）
+
+---
+
+# English
+
+Automated GEO (Generative Engine Optimization) audit: check whether a public page is easy for AI crawlers to fetch, understand, and cite.
+
+## Try it online (recommended)
+
+This repository is the command-line core. The full hosted product is:
+
+**[https://www.geohttp.com](https://www.geohttp.com)** (GEO Cool / GEO库)
+
+Paste a public URL to get:
+
+- A 0–100 score and band
+- Five-axis breakdown, evidence, and fix order
+- Multi-view reports (crawler probes, full catalog, observations, and more)
+
+No install and no account required for a trial.
+
+- English site: [https://www.geohttp.com/en](https://www.geohttp.com/en)
+- Scoring method (zh): [https://www.geohttp.com/method](https://www.geohttp.com/method)
+- Scoring method (en): [https://www.geohttp.com/en/method](https://www.geohttp.com/en/method)
+
+`03-geo_check.py` in this repo is the same judging logic used by [geohttp.com](https://www.geohttp.com) in production (five-axis v11).
+
+## Five-axis scoring (100 total)
+
+The base score is weighted across five axes. Fetch failures are **unknown**: they are not scored as zero in the numerator; they only lower confidence. Micro-adjust and the P0 cap apply after the base score.
+
+| Axis | Max | What we check |
+|---|---:|---|
+| Citation reach | 28 | Citation bots explicitly allowed, live HTTP 200, sitemap |
+| Structured data | 18 | Valid JSON-LD, key types, FAQPage / QAPage |
+| Citable content | 24 | Answer first, tables or authority links, time/price dates; bonus pool ≤5 |
+| On-page entity | 18 | Organization, sameAs, @id/profile, visible author and FAQ |
+| Technical rendering | 12 | No nested documents, lang, canonical, social tags, compression, HTTP/2 |
+
+### 1. Citation reach · 28
+
+| Item | Max | Notes |
+|---|---:|---|
+| Citation bots explicitly allowed | 12 | Core set: OAI-SearchBot, Claude-SearchBot, PerplexityBot, Googlebot, Applebot; full-site `Disallow: /` is P0 |
+| AI crawlers reachable (live) | 10 | Re-request the submitted URL with representative UAs; citation/search bots must return 200 |
+| Sitemap available and declared | 6 | Root sitemap opens, and robots has a `Sitemap:` line |
+
+Blocking training bots (GPTBot, ClaudeBot, CCBot, etc.) is a site policy choice and is not scored as a failure.
+
+### 2. Structured data · 18
+
+| Item | Max | Notes |
+|---|---:|---|
+| JSON-LD present and valid | 8 | At least one parseable `application/ld+json` block; syntax errors fail the item |
+| Key types | 5 | Organization / WebSite / Article / Product / BreadcrumbList / BlogPosting — four hits for full marks |
+| FAQPage / QAPage | 5 | Add only when the page truly has Q&A; missing FAQ on a brand homepage is expected |
+
+Entity points live on the **On-page entity** axis so they are not double-counted with types and Q&A.
+
+### 3. Citable content · 24
+
+| Item | Max | Notes |
+|---|---:|---|
+| Answer first or Q&A | 8 | A self-contained conclusion in main content, or FAQ / QA structure |
+| Data table or authority links | 6 | Table with headers, or links to government / education / encyclopedia / vendor sites |
+| Time and price dates | 5 | `time` with datetime; if prices appear, their date must be visible |
+| Content bonus pool | ≤5 | Title length, meta description, heading order, question headings, favicon, lazy-load placement, script budget — 1 point each, pool capped at 5 |
+
+### 4. On-page entity · 18
+
+| Item | Max | Notes |
+|---|---:|---|
+| Organization declared | 4 | Organization in JSON-LD |
+| sameAs authority anchors | 5 | At least two sameAs links (encyclopedia, official social, registry, or other official sites) |
+| @id and name/url | 3 | Stable `@id` plus name and url |
+| Visible author byline | 3 | Author visible on the page |
+| Visible FAQ / Q&A | 3 | Visible Q&A block (complements structured FAQ types) |
+
+### 5. Technical rendering · 12
+
+| Item | Max | Notes |
+|---|---:|---|
+| No nested documents | 3 | Only one html / head / DOCTYPE set |
+| Language declared | 2 | `html` has `lang` |
+| canonical | 2 | Canonical pointing at this page |
+| Open Graph / Twitter | 2 | Social tags meet the threshold |
+| Compression | 2 | gzip or brotli |
+| HTTP/2 | 1 | Protocol is HTTP/2 |
+
+## Micro-adjust, cap, and bands
+
+| Rule | Notes |
+|---|---|
+| Discovery files | Root llms.txt, ai.txt, or `/ai/*.json`, etc. — up to **+5** |
+| Injection self-check | High-signal injection phrases, `data-ai-` attributes, zero-width characters — up to **−5** |
+| Combined limit | Micro-adjust stays within **−5 ~ +5** |
+| P0 cap | Any unfixed P0 caps the final score at **74** |
+| Unknown | Timeout / connection failure → unknown; not zero in the numerator; confidence only |
+
+Bands: 90+ excellent · 75–89 good · 50–74 pass · below 50 needs work.
+
+## Multi-dimensional checks (beyond scored rows)
+
+Besides five-axis scored items, the script also runs the checks below. Some enter the issue list or report views and **do not own a share of the base 100** (same as the site’s “Observations / All checks” views).
+
+### Crawlers and platforms
+
+- Citation, retrieval, training, and classic search-engine UA lists plus robots policy
+- Multi-UA live reachability probes
+- Platform readiness matrix (e.g. Google AI Overviews, ChatGPT Search, Perplexity, Claude, Copilot) — display only; not added again into the 100
+
+### Page and content observations
+
+- Primary h1, semantic tags, meta misplaced in body
+- Security response headers
+- Full update date, modern image formats, DOM size hints
+- Title / description length, favicon, heading order, question-style headings
+- Lazy-load placement, script budget
+- llms.txt quality hints
+- Training-bot policy, Crawl-delay (observe)
+- Agent image dimensions (width/height hints)
+
+### Discovery and safety
+
+- AI discovery endpoints: llms.txt, `/.well-known/ai.txt`, `/ai/summary.json`, etc.
+- GEO injection / hidden-text self-check
+
+Issues are graded **P0 → P3**. P0 breaks the citation path (e.g. citation bots blocked site-wide, missing lang, missing/invalid JSON-LD, nested documents).
+
+Full scoring copy on the site: [Scoring (en)](https://www.geohttp.com/en/method) · [Articles (en)](https://www.geohttp.com/en/articles)
+
+## Requirements and usage
+
+- Python 3.8+
+- **Standard library only** (no requests, BeautifulSoup, or lxml)
+- HTTP GET only — does not write the target site or its database
+
+```bash
+# Audit one site
+python3 03-geo_check.py --site https://www.example.com/
+
+# JSON output
+python3 03-geo_check.py --site https://www.example.com/ --json
+
+# Write a Markdown report
+python3 03-geo_check.py --site https://www.example.com/ --out report.md
+```
+
+Exit codes: `0` ok; `2` one or more P0 issues (handy for cron / CI).
+
+## Relation to the live site
+
+| | Role |
+|---|---|
+| **Live site** | [www.geohttp.com](https://www.geohttp.com) — web submit, multi-view reports, articles, scoring docs |
+| **This repo** | Open-source core algorithm; run locally or wire into scripts; same judges as production |
+
+Want results first: open **[geohttp.com](https://www.geohttp.com)**. Want local replay or automation: use this repository.
+
+## License
+
+GNU Affero General Public License v3.0 (AGPL-3.0)
