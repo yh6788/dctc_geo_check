@@ -151,7 +151,12 @@ python3 03-geo_check.py --site https://www.example.com/ --json
 
 # 写出 Markdown 报告
 python3 03-geo_check.py --site https://www.example.com/ --out report.md
+
+# 跑默认示例清单（example.com / geohttp.com）
+python3 03-geo_check.py --all
 ```
+
+批量自测可把自有 URL 写在同目录 `site_profiles.local.json`（或环境变量 `GEO_CHECK_SITES` 指向的 JSON），**不要把该文件提交到公开仓库**。
 
 退出码：`0` 正常；`2` 存在 P0 问题（便于 cron / CI）。
 
@@ -313,7 +318,12 @@ python3 03-geo_check.py --site https://www.example.com/ --json
 
 # Write a Markdown report
 python3 03-geo_check.py --site https://www.example.com/ --out report.md
+
+# Run the default demo list (example.com / geohttp.com)
+python3 03-geo_check.py --all
 ```
+
+For private batch lists, put URLs in `site_profiles.local.json` next to the script (or point `GEO_CHECK_SITES` at a JSON file). **Do not commit that file to a public repository.**
 
 Exit codes: `0` ok; `2` one or more P0 issues (handy for cron / CI).
 
