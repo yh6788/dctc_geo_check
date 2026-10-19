@@ -21,8 +21,8 @@ geo_check.py —— 网站 GEO（AI 爬虫友好化）自动体检工具
      unknown 既不计 0 也不计满分，只拉低置信度；存在的 P0 会把总分封顶在「及格」。
 
 用法：
-  python3 geo_check.py --site https://www.hqbsh.com
-  python3 geo_check.py --all                      # 跑内置站点清单
+  python3 geo_check.py --site https://www.example.com/
+  python3 geo_check.py --all                      # 跑示例清单或本地 site_profiles.local.json
   python3 geo_check.py --site URL --json          # 输出 JSON（供程序消费）
   python3 geo_check.py --site URL --out report.md # 写 Markdown 报告
   python3 geo_check.py --site URL --ai            # 额外调用 AI_fenxi 做评审（可选）
@@ -1954,7 +1954,7 @@ def _origin(url):
     """取 URL 的 scheme://host[:port]，用于 robots / sitemap 这类【根级】资源。
 
     check_robots/check_sitemap 会把路径直接拼在入参后；若传入的是子路径页
-    （如 https://www.hqbnb.com/thinkpad-sz），拼出的 .../thinkpad-sz/robots.txt
+    （如 https://www.example.com/some-path），拼出的 .../some-path/robots.txt
     会 404，误报「未放行/未声明 Sitemap」。故这两项必须用 origin。
     """
     m = re.match(r"(https?://[^/]+)", url or "")
