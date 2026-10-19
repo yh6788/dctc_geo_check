@@ -1,33 +1,33 @@
 # coding=utf-8
-# 兼容 Python 3.8+（勿使用 X | Y 类型写法）
+# Compatible with Python 3.8+ (avoid X | Y type syntax).
 """
-geo_check.py —— 网站 GEO（AI 爬虫友好化）自动体检工具
-版本：v10（2026-10-10）—— 对齐文档 v10：新增「置信度门控 / P0 封顶 / AI 发现端点 /
-      Agent-ready 轻检 / GEO 注入自查」，并把打分升级为「证据优先（unknown 不计 0）」。
+geo_check.py — GEO (generative-engine citation readiness) audit tool.
 
-公开说明：https://www.geohttp.com/method （计分口径）
-           https://github.com/yh6788/dctc_geo_check （本仓库 README）
-  检测项来源（资料库章节号，仅作内部对照，不含本机路径）：
-  · 验收标准与检测命令 · 量化评分（0–100）· 置信度门控（unknown≠0 / P0 封顶）
-  · 问题分级（P0/P1/P2/P3）· 报告模板 · AI 爬虫清单
-  · AI 发现端点 / Agent-ready · GEO 注入自查
+Scoring aligns with five-axis v11 used in production at https://www.geohttp.com
+(confidence gating, P0 cap, AI discovery endpoints, agent-ready hints, injection self-check;
+unknown ≠ 0).
 
-设计原则（重要）：
-  1) 纯确定性：仅用 Python 标准库，无需 requests/bs4/lxml，任何环境可跑；
-  2) 只读安全：只发 HTTP GET，不写站点目录、不改数据库、不改模板；
-  3) 不依赖 AI：主体不 import 任何大模型；`--ai` 时才按需复用 AI_fenxi.py；
-  4) 输出可直接回填文档：默认打印 Markdown 报告（对齐 §十二 模板）；
-  5) 证据优先（v10）：区分「已判定通过 / 已判定失败 / 无法判定（unknown）」，
-     unknown 既不计 0 也不计满分，只拉低置信度；存在的 P0 会把总分封顶在「及格」。
+Public docs:
+  https://www.geohttp.com/method
+  https://www.geohttp.com/en/method
+  https://github.com/yh6788/dctc_geo_check
 
-用法：
-  python3 geo_check.py --site https://www.example.com/
-  python3 geo_check.py --all                      # 跑示例清单或本地 site_profiles.local.json
-  python3 geo_check.py --site URL --json          # 输出 JSON（供程序消费）
-  python3 geo_check.py --site URL --out report.md # 写 Markdown 报告
-  python3 geo_check.py --site URL --ai            # 额外调用 AI_fenxi 做评审（可选）
+Design:
+  1) Deterministic: Python standard library only (no requests/bs4/lxml).
+  2) Read-only: HTTP GET only; never writes the target site.
+  3) No LLM required; optional --ai loads a local helper if present.
+  4) Default Markdown report suitable for humans and automation.
+  5) Evidence-first: pass / fail / unknown; unknown lowers confidence only;
+     any open P0 caps the final score at 74.
 
-退出码：0 正常；2 存在 P0 问题（便于 cron/CI 判断）。
+Usage:
+  python3 03-geo_check.py --site https://www.example.com/
+  python3 03-geo_check.py --all
+  python3 03-geo_check.py --site URL --json
+  python3 03-geo_check.py --site URL --out report.md
+  python3 03-geo_check.py --site URL --ai
+
+Exit codes: 0 ok; 2 one or more P0 issues (for cron/CI).
 """
 
 from __future__ import annotations
@@ -48,21 +48,21 @@ import urllib.request
 from html.parser import HTMLParser
 
 # ---------------------------------------------------------------------------
-# 常量：AI 爬虫清单（来源：文档 §四；分类与 geo-optimizer-skill 的 BOT_TIERS 一致）
+# Constants: AI crawler lists (tiers aligned with common BOT_TIERS practice)
 # ---------------------------------------------------------------------------
 
-# 引用型核心集（CITATION_BOTS）——决定"被引用"，robots 必须显式 Allow
+# Citation core set — must be explicitly Allowed in robots for citation readiness
 CITATION_BOTS = ["OAI-SearchBot", "Claude-SearchBot", "PerplexityBot", "Googlebot", "Applebot"]
-# 其他检索/按需型
+# Other retrieval / on-demand bots
 SEARCH_BOTS = ["ChatGPT-User", "Claude-User", "Perplexity-User", "xAI-Bot",
                "Amazonbot", "DuckAssistBot", "YouBot", "PetalBot"]
-# 训练型（放行与否自行权衡）
+# Training bots (allow/block is a site policy choice)
 TRAINING_BOTS = ["GPTBot", "ClaudeBot", "Applebot-Extended", "CCBot", "Bytespider",
                  "meta-externalagent", "Meta-ExternalFetcher", "AI2Bot", "cohere-ai"]
-# 经典搜索引擎
+# Classic search engines
 CLASSIC_BOTS = ["Baiduspider", "bingbot", "Sogou", "360Spider", "YisouSpider"]
 
-# 用于连通性实测的代表性 UA（覆盖各类）
+# Representative UAs for live reachability probes
 PROBE_UAS = {
     "Googlebot": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
     "bingbot": "Mozilla/5.0 (compatible; bingbot/2.0; +http://www.bing.com/bingbot.htm)",
@@ -75,8 +75,8 @@ PROBE_UAS = {
     "PerplexityBot": "Mozilla/5.0 (compatible; PerplexityBot/1.0; +https://perplexity.ai/perplexitybot)",
     "CCBot": "CCBot/2.0 (https://commoncrawl.org/faq/)",
     "Bytespider": "Mozilla/5.0 (compatible; Bytespider; spider-feedback@bytedance.com)",
-    # 分平台展示。厂商没有单独公布爬虫说明；token 取公开 robots 清单里的写法。
-    # 非 200 只让对应平台显示不可达，不把「AI 爬虫实测可达」打成 P0。
+    # Display-only platform rows; UA strings follow public robots conventions.
+    # Non-200 only marks that platform unreachable; does not fail the scored crawl item as P0.
     "DoubaoBot": "Mozilla/5.0 (compatible; DoubaoBot/1.0; +https://www.doubao.com/)",
     "DeepSeekBot": "Mozilla/5.0 (compatible; DeepSeekBot/1.0; +https://www.deepseek.com/)",
     "MiniMaxBot": "Mozilla/5.0 (compatible; MiniMaxBot/1.0; +https://www.minimax.io/)",
@@ -84,8 +84,8 @@ PROBE_UAS = {
 
 DISPLAY_ONLY_BOTS = {"DoubaoBot", "DeepSeekBot", "MiniMaxBot"}
 
-# 平台 → 代表性 UA 映射（对齐 geo.new 的"分平台就绪度"矩阵，★ v8 新增）
-# 每个平台只要有一条 UA 实测可达，即视为该平台"可读"。
+# Platform → representative UA map (readiness matrix for report display)
+# A platform is "readable" if any listed UA returns live success.
 PLATFORMS = {
     "Google AI 概览": ["Googlebot"],
     "Gemini": ["Googlebot"],
@@ -100,14 +100,14 @@ PLATFORMS = {
 
 DEFAULT_UA = "Mozilla/5.0 (compatible; geo_check/1.0; GEO audit tool)"
 
-# 权威外链域名（用于"引用权威外链"启发式，§13.1 方法 1）
+# Authority-link host suffixes for the citable-content heuristic
 AUTHORITATIVE_DOMAINS = (
     ".gov", ".edu", "wikipedia.org", "wikidata.org", "lenovo.com", "dell.com",
     "apple.com", "hp.com", "asus.com", "intel.com", "amd.com", "nvidia.com",
     "github.com", "arxiv.org", "stackoverflow.com",
 )
 
-# --all 默认示例（公开演示站）。自有批量清单请放同目录 site_profiles.local.json，勿提交仓库。
+# Default --all demos (public). Put private lists in site_profiles.local.json (do not publish).
 SITE_PROFILES = [
     {"name": "example.com", "url": "https://www.example.com/", "cms": "example"},
     {"name": "geohttp.com", "url": "https://www.geohttp.com/", "cms": "GEO Cool"},
@@ -115,7 +115,7 @@ SITE_PROFILES = [
 
 
 def load_site_profiles():
-    """优先读 GEO_CHECK_SITES 或 site_profiles.local.json；否则用内置示例。"""
+    """Prefer GEO_CHECK_SITES or site_profiles.local.json; else built-in demos."""
     candidates = []
     env_path = (os.environ.get("GEO_CHECK_SITES") or "").strip()
     if env_path:
@@ -131,7 +131,7 @@ def load_site_profiles():
             if isinstance(data, list) and data:
                 return data
         except Exception as exc:
-            sys.stderr.write("读取站点清单失败 %s: %s\n" % (path, exc))
+            sys.stderr.write("Failed to load site list %s: %s\n" % (path, exc))
     return SITE_PROFILES
 
 
@@ -139,14 +139,14 @@ TIMEOUT = 20
 
 
 # ---------------------------------------------------------------------------
-# HTTP 抓取（标准库；返回状态/头/正文/HTTP 版本）
+# HTTP fetch (stdlib; returns status/headers/body/HTTP version)
 # ---------------------------------------------------------------------------
 
 def fetch(url, ua=DEFAULT_UA, accept_encoding=None, timeout=TIMEOUT):
-    """发 GET，返回 dict：{ok,status,headers,body,version,error,url,requested_url,redirects}。
+    """GET and return {ok,status,headers,body,version,error,url,requested_url,redirects}.
 
-    自动跟随 3xx。url 为最终落地地址；redirects 为 [{status,from,to}, …]。
-    永不抛异常。
+    Follows 3xx. url is the final URL; redirects is [{status,from,to}, …].
+    Never raises.
     """
     req = urllib.request.Request(url)
     req.add_header("User-Agent", ua)
@@ -154,7 +154,7 @@ def fetch(url, ua=DEFAULT_UA, accept_encoding=None, timeout=TIMEOUT):
         req.add_header("Accept-Encoding", accept_encoding)
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE  # 体检场景容忍自签/链问题
+    ctx.verify_mode = ssl.CERT_NONE  # audits tolerate self-signed / chain issues
     redirects = []
 
     class _RecordRedirect(urllib.request.HTTPRedirectHandler):
@@ -188,7 +188,7 @@ def fetch(url, ua=DEFAULT_UA, accept_encoding=None, timeout=TIMEOUT):
                 "redirects": list(redirects),
             }
     except urllib.error.HTTPError as e:
-        # 仍尽量读取 body（robots/sitemap 404 等有意义）
+        # Still try to read body (404 on robots/sitemap can be meaningful)
         try:
             raw = e.read()
         except Exception:
@@ -209,7 +209,7 @@ def fetch(url, ua=DEFAULT_UA, accept_encoding=None, timeout=TIMEOUT):
             "requested_url": url,
             "redirects": list(redirects),
         }
-    except Exception as e:  # 超时/连接/SSL/解析
+    except Exception as e:  # timeout / connect / SSL / parse
         return {
             "ok": False,
             "status": None,
@@ -224,7 +224,7 @@ def fetch(url, ua=DEFAULT_UA, accept_encoding=None, timeout=TIMEOUT):
 
 
 def _decode_body(raw, content_encoding):
-    """按 Content-Encoding 解压并按 charset 解码（仅用于文本分析）。"""
+    """Decompress by Content-Encoding and decode charset (text analysis only)."""
     if raw is None:
         return ""
     data = raw
@@ -237,7 +237,7 @@ def _decode_body(raw, content_encoding):
                 data = gzip.decompress(raw)
             except Exception:
                 data = raw
-        # br（brotli）标准库不支持解压：不解，按原始处理（不影响头检测）
+        # brotli not in stdlib: leave raw (header check still works)
     except Exception:
         data = raw
     for cs in ("utf-8", "gb18030", "gbk", "latin-1"):
@@ -249,15 +249,15 @@ def _decode_body(raw, content_encoding):
 
 
 def head(url, timeout=TIMEOUT):
-    """只取响应头（用于压缩/版本检测，避免下载大文件）。"""
+    """Fetch with Accept-Encoding for compression/version checks."""
     return fetch(url, accept_encoding="gzip, br", timeout=timeout)
 
 
 def _json_request(url, method="GET", payload=None, headers=None, timeout=TIMEOUT):
-    """标准库发 JSON 请求；返回 (status, data_dict, resp_headers)。失败时 data 为 None。
+    """JSON request via stdlib; return (status, data_dict, resp_headers). data is None on failure.
 
-    注意：不发送 Origin / Sec-Fetch-*（geo.new 首次无 token 请求会拒绝浏览器型请求）；
-    但必须带 User-Agent，否则被 Cloudflare 以 Error 1010 拦截。
+    Do not send Origin / Sec-Fetch-* (geo.new rejects browser-like first requests).
+    User-Agent is required (Cloudflare Error 1010 otherwise).
     """
     h = {"Accept": "application/json", "User-Agent": DEFAULT_UA}
     if headers:
@@ -292,29 +292,29 @@ def _json_request(url, method="GET", payload=None, headers=None, timeout=TIMEOUT
 
 
 # ---------------------------------------------------------------------------
-# HTML 解析：统计语义标签 / meta / script(JSON-LD) / link / html 属性
+# HTML parse: semantic tags / meta / JSON-LD scripts / link / html attrs
 # ---------------------------------------------------------------------------
 
 class PageParser(HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.tag_counts = {}
-        self.html_attrs = {}       # 第一个 <html> 的属性（主文档）
+        self.html_attrs = {}       # attrs of first <html> (main document)
         self._first_html_seen = False
-        self.metas = []          # 每个 <meta> 的属性 dict
-        self.links = []          # 每个 <link> 的属性 dict
-        self.jsonld = []         # JSON-LD 原始字符串
+        self.metas = []          # each <meta> attrs
+        self.links = []          # each <link> attrs
+        self.jsonld = []         # raw JSON-LD strings
         self.times = []          # <time datetime=...>
-        self.imgs = []           # 每个 <img> 的属性 dict（★ v10：CLS / Agent-ready）
-        # ★ v11：<h1> 文本 / 出现位置；body 内 <meta>
+        self.imgs = []           # each <img> attrs (CLS / agent-ready hints)
+        # <h1> texts; meta tags found inside <body>
         self.h1_texts = []
-        self.meta_in_body = 0    # 出现在 </head> 之后的 <meta> 数量
+        self.meta_in_body = 0    # <meta> count after body start
         self._in_body = False
         self._in_h1 = False
         self._h1_buf = []
         self._in_jsonld = False
         self._jsonld_buf = []
-        # ★ 观察加厚：title / h1–h6 / script
+        # Observation extras: title / h1–h6 / script
         self.title_text = ""
         self.headings = []       # [(level, text), ...]
         self.scripts = []        # [{src, inline_len}]
@@ -331,7 +331,7 @@ class PageParser(HTMLParser):
         a = {k.lower(): (v or "") for k, v in attrs}
         self.tag_counts[tag] = self.tag_counts.get(tag, 0) + 1
         if tag == "html" and not self._first_html_seen:
-            # 只记第一个 <html> —— 主文档属性（嵌套时第二个不算）
+            # Record first <html> only (nested documents ignored here)
             self.html_attrs = a
             self._first_html_seen = True
         elif tag == "body":
@@ -425,12 +425,12 @@ def parse_html(html):
 
 
 def count_raw(html, pattern):
-    """原始正则计数（用于嵌套文档等 §五 检测 8）。"""
+    """Raw regex count (e.g. nested-document checks)."""
     return len(re.findall(pattern, html, re.I))
 
 
 # ---------------------------------------------------------------------------
-# 单项检测：全部返回 {status: bool, value, expected, evidence, level}
+# Single checks: each returns {status, known, value, expected, evidence, level}
 # ---------------------------------------------------------------------------
 
 def _ok(value, expected, evidence="", level="P0"):
@@ -442,18 +442,18 @@ def _fail(value, expected, evidence="", level="P0"):
 
 
 def _unknown(value, expected, evidence="", level="P2"):
-    """无法判定（网络错误 / 不适用）：既不计 0 也不计满分，只拉低置信度（§一.6）。"""
+    """Unknown (network / N/A): neither 0 nor full points; lowers confidence only."""
     return {"status": False, "known": False, "value": value, "expected": expected,
             "evidence": evidence, "level": level}
 
 
 def _is_conn_error(resp):
-    """该 HTTP 响应是否为『连接层失败』（拿不到任何状态码）——用于判 unknown。"""
+    """True when the response never got an HTTP status (connection-layer failure)."""
     return isinstance(resp, dict) and resp.get("status") is None and not resp.get("ok")
 
 
 def check_jsonld(html, parser):
-    """§五 检测 1 + 13：JSON-LD 数量与合法性。"""
+    """JSON-LD presence and validity."""
     blocks = parser.jsonld
     types, invalid = [], 0
     for b in blocks:
@@ -471,7 +471,7 @@ def check_jsonld(html, parser):
 
 
 def _extract_types(obj):
-    """递归提取 @type（含 @graph）。"""
+    """Recursively collect @type values (including @graph)."""
     out = []
     if isinstance(obj, dict):
         t = obj.get("@type")
@@ -489,7 +489,7 @@ def _extract_types(obj):
 
 
 def check_semantic_tags(parser):
-    """§五 检测 2：语义化标签。"""
+    """Semantic HTML tags (main/article/footer/time, etc.)."""
     need = ["main", "article", "footer", "header", "nav", "time"]
     counts = {t: parser.tag_counts.get(t, 0) for t in need}
     has = all(counts.get(t, 0) >= 1 for t in ("main", "article", "footer", "time"))
@@ -499,12 +499,10 @@ def check_semantic_tags(parser):
 
 
 def check_main_heading(parser):
-    """★ v11：主标题 <h1>（对齐 geo.new S07/G06「Main heading / 内容组织」）。
+    """Primary <h1> (main heading).
 
-    每个页面应有且仅有一个描述主主题的 <h1>：
-      · 0 个 → AI 难以判定页面主主题（geo.new 判 S07 fail）；
-      · ≥1 个 → 通过，但多 H1 时给出提示证据。
-    注意：按 **<h1> 标签数**计数（logo 型 h1 内只有 <img>、无文字，也算有效）。
+    Prefer one topical <h1> per page. Zero fails; multiple still passes with a hint.
+    Count is by <h1> tags (image-only logo h1 still counts).
     """
     n = int(parser.tag_counts.get("h1", 0) or 0)
     texts = [t for t in (parser.h1_texts or []) if t]
@@ -518,17 +516,16 @@ def check_main_heading(parser):
 
 
 def check_meta_in_body(parser):
-    """★ v11：<meta> 不得出现在 <body> 内（对齐 geo.new HTML-06）。
+    """<meta> must not appear inside <body>.
 
-    body 内的 <meta>（常见于主题/编辑器把标签误插到正文）会被浏览器部分忽略，
-    属 HTML 结构错误，且可能干扰解析。
+    Body metas (often from broken themes/editors) may be ignored and confuse parsers.
     """
     n = int(getattr(parser, "meta_in_body", 0) or 0)
     ev = "body 内 <meta>=%d（应全部在 <head>）" % n
     return _ok(n, "0", ev, "P2") if n == 0 else _fail(n, "0", ev, "P2")
 
 
-# 安全加固响应头（对齐 geo.new SEC-03；CSP 或 frame-ancestors 二者其一即可满足 X-Frame 项）
+# Security headers (CSP or frame-ancestors can satisfy the frame item)
 SECURITY_HEADERS = (
     ("content-security-policy", "CSP 或 frame-ancestors"),
     ("x-content-type-options", "X-Content-Type-Options: nosniff"),
@@ -538,11 +535,10 @@ SECURITY_HEADERS = (
 
 
 def check_security_headers(resp):
-    """★ v11：安全响应头（对齐 geo.new SEC-03）。
+    """Security response headers.
 
-    resp 为首页 fetch 的返回 dict（需含 headers）。检查标准加固头是否下发：
-    CSP（或 frame-ancestors）、X-Content-Type-Options、Referrer-Policy、Permissions-Policy。
-    至少下发 3/4 即通过（不强制 CSP 的严格策略）。
+    Expect CSP (or frame-ancestors), X-Content-Type-Options, Referrer-Policy,
+    Permissions-Policy. Pass with at least 3 of 4 (CSP need not be strict).
     """
     h = {k.lower(): v for k, v in (resp.get("headers") or {}).items()}
     present = [label for key, label in SECURITY_HEADERS if h.get(key)]
@@ -554,7 +550,7 @@ def check_security_headers(resp):
 
 
 def check_canonical(parser):
-    """§五 检测 3：canonical。"""
+    """rel=canonical present."""
     found = [l.get("href", "") for l in parser.links if "canonical" in l.get("rel", "").lower()]
     ev = "canonical=%s" % (found[0] if found else "无")
     return _ok(found, "有 canonical", ev, "P1") if found else \
@@ -562,7 +558,7 @@ def check_canonical(parser):
 
 
 def check_og(parser):
-    """§五 检测 4：Open Graph / Twitter Card。"""
+    """Open Graph / Twitter Card tags."""
     og = [m for m in parser.metas if m.get("property", "").startswith("og:")]
     tw = [m for m in parser.metas if m.get("name", "").startswith("twitter:")]
     n = len(og) + len(tw)
@@ -571,14 +567,14 @@ def check_og(parser):
 
 
 def check_lang(parser):
-    """§五 检测 9：<html lang>。"""
+    """html lang attribute."""
     lang = parser.html_attrs.get("lang", "")
     return _ok(lang, "含 lang", "lang=%s" % (lang or "无"), "P0") if lang else \
         _fail("", "含 lang", "lang=无", "P0")
 
 
 def check_nested_doc(html):
-    """§五 检测 8：嵌套文档（<html>/<head>/<!DOCTYPE> 各应恰好 1 次）。"""
+    """Nested document check: exactly one html/head/DOCTYPE each."""
     n_html = count_raw(html, r"<html[\s>]")
     n_head = count_raw(html, r"<head[\s>]")
     n_dt = count_raw(html, r"<!DOCTYPE")
@@ -589,7 +585,7 @@ def check_nested_doc(html):
 
 
 def check_compression(url):
-    """§五 检测 5：压缩（gzip/br）。连接层失败 → unknown（§一.6）。"""
+    """Content-Encoding gzip/br. Connection failure → unknown."""
     r = head(url)
     if _is_conn_error(r):
         return _unknown("", "含 gzip 或 br", "抓取失败，无法判定压缩（unknown）", "P2")
@@ -599,10 +595,9 @@ def check_compression(url):
 
 
 def check_http_version(url):
-    """§五 检测 6：协议版本。
+    """HTTP protocol version.
 
-    urllib 只能到 HTTP/1.1，无法识别 h2。优先用系统 curl（可探测 h2），
-    无 curl 时退回 urllib 结果，并明确标注"未探测"避免恒判失败。
+    urllib stops at HTTP/1.1. Prefer ALPN/curl for h2; fall back with a note.
     """
     ver, note = _http_version_via_alpn(url)
     if ver is None:
@@ -614,7 +609,7 @@ def check_http_version(url):
             if _is_conn_error(r):
                 return _unknown("", "2 或 3（非 1.1）", "抓取失败，无法判定协议版本（unknown）", "P2")
             v = r.get("version")
-            ver = {10: "1.1", 11: "1.1"}.get(v, "未知")  # urllib 无 h2 能力
+            ver = {10: "1.1", 11: "1.1"}.get(v, "unknown")  # urllib cannot see h2
             note = "（urllib 无法探测 h2，建议复核）"
     ev = "http_version=%s%s" % (ver, note)
     good = ver in ("2", "2.0", "3", "3.0")
@@ -623,10 +618,7 @@ def check_http_version(url):
 
 
 def _http_version_via_alpn(url):
-    """TLS ALPN 握手判定 h2（权威，不依赖 curl 是否带 HTTP2 特性）。
-
-    返回 (ver, note)；无法握手返回 (None, None)。
-    """
+    """Detect h2 via TLS ALPN. Return (ver, note) or (None, None)."""
     import socket
     import ssl
     import urllib.parse
@@ -649,7 +641,7 @@ def _http_version_via_alpn(url):
 
 
 def _http_version_via_curl(url):
-    """用 curl 探测 http 版本（curl 能区分 h2）；不可用返回 None。"""
+    """Probe HTTP version with curl when available; else None."""
     import shutil
     import subprocess
     if not shutil.which("curl"):
@@ -665,9 +657,9 @@ def _http_version_via_curl(url):
 
 
 def _parse_robots(body):
-    """把 robots.txt 解析为组列表：[{"agents":[..], "allow":bool_covers_root, "disallow_root":bool}]。
+    """Parse robots.txt into groups with agents / allow_root / disallow_root.
 
-    简化实现：按连续 User-agent 行分组，规则聚合到组。
+    Simplified: consecutive User-agent lines form a group; rules attach to it.
     """
     groups = []
     cur = None
@@ -694,17 +686,17 @@ def _parse_robots(body):
                     cur["disallow_root"] = True
                 else:
                     cur["allow_root"] = True
-            cur["closed"] = True  # 规则行之后，新的 User-agent 开新组
+            cur["closed"] = True  # after a rule line, next User-agent starts a new group
     return groups
 
 
 def _robots_blocked(groups, bot):
-    """该 bot 是否被明确阻断（/ 全禁）。"""
-    # 1) 针对该 bot 的组
+    """True if this bot is explicitly blocked with Disallow: /."""
+    # 1) groups targeting this bot
     for g in groups:
         if bot in g["agents"] and g["disallow_root"] and not g["allow_root"]:
             return True
-    # 2) 通配组全禁（且无该 bot 专属放行）
+    # 2) wildcard group denies all, and no bot-specific Allow
     has_own_allow = any(bot in g["agents"] and g["allow_root"] for g in groups)
     if not has_own_allow:
         for g in groups:
@@ -714,11 +706,9 @@ def _robots_blocked(groups, bot):
 
 
 def check_robots(base):
-    """§五 检测 10 + §四：robots 存在、声明 Sitemap、引用型爬虫放行情况。
+    """robots.txt presence, Sitemap declaration, citation-bot allow policy.
 
-    分级（对齐 §〇.2"阻断优先"）：
-      · 被明确阻断（Disallow: /）        → P0（致命，直接断掉被引用来源）
-      · 未被阻断但未"逐条显式 Allow"     → P1（优化项；实测可达，非阻断）
+    Explicit Disallow: / → P0. Reachable but not per-bot Allow → P1.
     """
     r = fetch(base.rstrip("/") + "/robots.txt")
     if _is_conn_error(r):
@@ -755,7 +745,7 @@ def check_robots(base):
         cita = _fail([b for b in CITATION_BOTS if b not in explicit], "引用型逐条显式 Allow",
                      "实测可达但未逐条显式 Allow（缺=%s）；靠 User-agent: * 兜底" %
                      ",".join(b for b in CITATION_BOTS if b not in explicit), "P1")
-    # 训练型策略（观察用，不计分）：是否对 TRAINING_BOTS 写了独立段落
+    # Training-bot policy (observe only): dedicated User-agent groups
     train_named, train_blocked = [], []
     for bot in TRAINING_BOTS[:6]:
         seg = _robots_segment(body, bot)
@@ -765,7 +755,7 @@ def check_robots(base):
                 train_blocked.append(bot)
     train_ev = "独立段落=%s；其中 Disallow:/=%s" % (
         ",".join(train_named) or "无", ",".join(train_blocked) or "无")
-    # 有独立策略（无论放行或拒绝）即视为「已声明训练策略」
+    # Any dedicated policy (allow or deny) counts as "training policy declared"
     train_ok = bool(train_named)
     training_policy = _ok(True, "训练爬虫有独立策略", train_ev, "P3") if train_ok else \
         _fail(False, "训练爬虫有独立策略", train_ev + "（可选用 User-agent 段声明 GPTBot 等）", "P3")
@@ -785,7 +775,7 @@ def check_robots(base):
 
 
 def _robots_segment(body, bot):
-    """返回 robots 中指定 bot 的 User-agent 段落文本；无独立段落返回 None。"""
+    """Return the User-agent segment for bot, or None if absent."""
     lines = body.splitlines()
     seg, capturing = [], False
     for ln in lines:
@@ -801,7 +791,7 @@ def _robots_segment(body, bot):
 
 
 def check_sitemap(base):
-    """§五 检测 12：sitemap 存在与时效（支持 sitemap index）。"""
+    """Sitemap presence and freshness (sitemap index supported)."""
     r = fetch(base.rstrip("/") + "/sitemap.xml")
     if _is_conn_error(r):
         return {"exists": _unknown(False, "存在", "抓取失败，无法判定 sitemap（unknown）", "P0"),
@@ -811,7 +801,7 @@ def check_sitemap(base):
                 "fresh": _fail(False, "lastmod 新鲜", "不可用", "P2"), "latest": ""}
     body = r["body"]
     lastmods = re.findall(r"<lastmod>\s*([^<\s]+)", body)
-    # 若为 sitemap index，抓第一个子 sitemap 再取 lastmod
+    # If sitemap index, fetch first child sitemap for lastmod
     if not lastmods:
         sub = re.search(r"<loc>\s*([^<\s]+sitemap[^<\s]*\.xml)", body)
         if sub:
@@ -833,24 +823,23 @@ def check_sitemap(base):
         fresh_res = _ok(fresh, "最近 90 天内有更新", ev, "P2") if fresh else \
             _fail(False, "最近 90 天内有更新", ev, "P2")
     else:
-        # 无 lastmod 信号：判不新鲜但不误报"陈旧"
+        # No lastmod: treat as not-fresh without claiming "stale"
         fresh_res = _fail(False, "含 lastmod 且最近 90 天内有更新", ev + "（未提供 lastmod）", "P2")
     return {"exists": exists, "fresh": fresh_res, "latest": latest}
 
 
 def check_ai_crawler_reach(url):
-    """§五 检测 11 + §四：AI 爬虫实测连通性（**按爬虫分级**判定）。
+    """Live AI-crawler reachability (graded by bot tier).
 
-    §四 把爬虫分为「引用型 / 检索型」与「训练型」：
-      · **引用型（CITATION_BOTS）/ 检索型** 被非 200 拦截 → **P0**（断掉"被引用"来源）；
-      · **训练型（TRAINING_BOTS）** 被拦 → **不算问题**（放行与否自行权衡），仅作信息提示；
-      · 连接层失败（None，重试仍失败）→ unknown（本机网络，§一.6）。
+    Citation/search bots blocked (non-200) → P0.
+    Training bots blocked → not a scored failure (policy choice).
+    Connection failure → unknown.
     """
     results = {}
     blocked_critical, blocked_training, conn_err = [], [], []
     for name, ua in PROBE_UAS.items():
         status = None
-        for _ in range(3):  # 最多 3 次，抵御瞬时抖动
+        for _ in range(3):  # up to 3 tries against transient failures
             r = fetch(url, ua=ua)
             status = r["status"]
             if status is not None:
@@ -864,7 +853,7 @@ def check_ai_crawler_reach(url):
             (blocked_training if name in TRAINING_BOTS else blocked_critical).append(name)
     ev = " ".join("%s=%s" % (k, v if v is not None else "连接错误") for k, v in results.items())
     if blocked_training:
-        ev += "（训练型 %s 被拦，属可选，不计问题；§四）" % ",".join(blocked_training)
+        ev += "（训练型 %s 被拦，属可选，不计问题）" % ",".join(blocked_training)
     if blocked_critical:
         return _fail(blocked_critical, "引用型/检索型全部 200",
                      ev + "（引用/检索型被拦截）", "P0")
@@ -874,14 +863,14 @@ def check_ai_crawler_reach(url):
     return _ok(results, "引用型/检索型全部 200", ev, "P0")
 
 
-# ---- 内容可引用性（启发式，§一.4 / §13.1 / §13.4）---------------------------
+# ---- Citable content heuristics ------------------------------------------------
 
 def check_content_citability(html, parser):
-    """启发式评估：答案前置 / 表格与外链 / time + 价格日期。"""
+    """Heuristics: answer-first / table-or-authority links / time+price date."""
     text = re.sub(r"<[^>]+>", " ", html)
     text = re.sub(r"\s+", " ", text)
 
-    # ① 答案前置 / 答案胶囊：正文前部存在 20–300 字的完整陈述段（或含 FAQ/QA）
+    # 1) Answer-first: a 20–300 char statement near the top, or FAQ/QA
     front = ""
     paras = re.findall(r"<p[^>]*>(.*?)</p>", html, re.S | re.I)
     paras = [re.sub(r"<[^>]+>", "", p).strip() for p in paras]
@@ -892,8 +881,8 @@ def check_content_citability(html, parser):
     has_faq = any(t in ("FAQPage", "QAPage") for t in types)
     has_answer = bool(front) or has_faq
 
-    # ② 数据表格 / 权威外链
-    # 只把"含 <th> 或 <thead> 的表"视为数据表，排除 Discuz 布局表（cellspacing/cellpadding）
+    # 2) Data table / authority outbound links
+    # Count tables with <th>/<thead> only; skip layout tables
     data_table = (parser.tag_counts.get("th", 0) >= 1 or
                   parser.tag_counts.get("thead", 0) >= 1)
     ext_auth = 0
@@ -903,7 +892,7 @@ def check_content_citability(html, parser):
             ext_auth += 1
     has_table_links = data_table or ext_auth > 0
 
-    # ③ <time datetime> 与价格日期标注
+    # 3) <time datetime> plus visible price date
     has_time = len([t for t in parser.times if t]) >= 1
     price_date = bool(re.search(r"20\d{2}[.\-年/]\s*\d{1,2}", text)) and \
                  bool(re.search(r"(价|￥|¥|元)", text))
@@ -935,10 +924,10 @@ def _extract_types_of(parser):
     return types
 
 
-# ---- 实体信号（对齐 geo.new 的 Entity Signals 轴，★ v8 新增）-----------------
+# ---- Entity signals -----------------
 
 def _jsonld_nodes(parser):
-    """把所有 JSON-LD 解析为若干"节点 dict"（递归展开 @graph / 数组）。"""
+    """Flatten JSON-LD into node dicts (expand @graph / nesting)."""
     nodes = []
 
     def walk(obj):
@@ -972,13 +961,13 @@ def _node_name(node):
 
 
 def check_entity_signals(parser):
-    """实体信号：Organization 的 sameAs / @id / name / url（§13.2 知识图谱四支柱）。
+    """Entity signals: Organization sameAs / @id / name / url.
 
     返回 dict，每个子项为独立 check（供评分与问题清单引用）。
     分级：Organization 缺失或 sameAs 缺失 → P1（显著影响"这是什么实体"的判定）。
     """
     nodes = _jsonld_nodes(parser)
-    # 兼容无 @type 但含 @graph 的写法的兜底：直接扫描 org-ish 字段
+    # Fallback when @type sits outside @graph: scan org-ish fields
     org = None
     for nd in nodes:
         if "Organization" in _as_list(nd.get("@type")):
@@ -1018,13 +1007,13 @@ def check_entity_signals(parser):
 
 
 def check_platform_readiness(ai_crawl):
-    """分平台就绪度：把爬虫实测结果映射为各 AI 平台"可读/不可读"矩阵（★ v8 新增）。
+    """Map live UA results into a per-platform readable matrix (display only).
 
-    输入为 check_ai_crawler_reach 的返回（其 value 是 {UA: status} 字典）。
-    仅作展示；不直接参与 0–100 计分（避免与"AI 爬虫实测可达"重复计分）。
+    Input is check_ai_crawler_reach output (value is {UA: status}).
+    Not part of the base 100 (avoids double-counting the crawl item).
     """
     raw = ai_crawl.get("value")
-    results = raw if isinstance(raw, dict) else {}   # 网络全失败时 value 为 list，兼容之
+    results = raw if isinstance(raw, dict) else {}   # value may be a list on total failure
     matrix = {}
     for plat, uas in PLATFORMS.items():
         st = [results.get(ua) for ua in uas]
@@ -1033,11 +1022,11 @@ def check_platform_readiness(ai_crawl):
     return matrix
 
 
-# ---- AI 发现端点 / Agent-ready / 注入自查（★ v10 新增）----------------------
+# ---- AI discovery endpoints / agent-ready / injection self-check ---------------
 
-# 端点 → (路径, 标签, 满分微调值)；对齐 §三 S 与 §17.2
+# endpoint → (path, label, micro-adjust weight)
 AI_ENDPOINTS = [
-    ("/llms.txt",               "llms.txt",        2),   # Google 忽略但 agent 生态已落地
+    ("/llms.txt",               "llms.txt",        2),   # ignored by Google; useful for agents
     ("/.well-known/ai.txt",     "ai.txt",          1),
     ("/ai/summary.json",        "ai/summary.json", 1),
     ("/ai/faq.json",            "ai/faq.json",     1),
@@ -1046,11 +1035,11 @@ AI_ENDPOINTS = [
 
 
 def check_ai_endpoints(origin):
-    """§三 S / §17.2：AI 发现端点（llms.txt、ai.txt、ai/*.json）是否存在。
+    """AI discovery endpoints (llms.txt, ai.txt, ai/*.json).
 
-    属「低优先可做」：做了对 Google 无益无害，对 agent / 其它系统有用。
-    仅作展示 + **微调项**（合计最多 +5，见 §一.4），不计入基础 100。
-    连接失败按「不存在」计（不阻断、不致 unknown）。
+    Low priority for classic Google ranking; useful for agents.
+    Display + micro-adjust (up to +5); not part of base 100.
+    Connection failure counts as missing (not unknown).
     """
     found, missing = [], []
     points = 0
@@ -1073,11 +1062,11 @@ def check_ai_endpoints(origin):
 
 
 def check_injection_risks(html, parser):
-    """§13.6：防御 GEO 投毒 / 注入 / 隐藏文字（高信号模式）。
+    """GEO injection / hidden-text self-check (high-signal patterns).
 
-    只收敛为**高置信**模式（提示注入短语 / data-ai-* 属性 / 不可见 Unicode）；
-    CSS 隐藏文字仅作**提示**（display:none 在正常 UI 中很常见，不扣分）。
-    命中 → P2 问题 + 微调 −5（§一.4 微调项）。
+    High-confidence only (prompt phrases / data-ai-* / invisible Unicode).
+    CSS hide is a hint only (display:none is common in UI).
+    Hit → P2 issue + micro −5.
     """
     low = html.lower()
     hits = []
@@ -1111,10 +1100,9 @@ def check_injection_risks(html, parser):
 
 
 def check_agent_ready(parser):
-    """§17.1：Agent-ready 轻检（仅展示，不计分）。
+    """Agent-ready light check (display only, unscored).
 
-    agent 依据元素定位做操作，**CLS（布局偏移）会破坏定位**；无尺寸图片是 CLS 主因之一。
-    故统计 <img> 缺 width/height 的数量，作为「Agent 稳定性」信号。
+    Agents locate elements; CLS from images without width/height is a risk signal.
     """
     total = len(parser.imgs)
     missing = [im for im in parser.imgs
@@ -1130,14 +1118,14 @@ def check_agent_ready(parser):
     }
 
 
-# ---- 观察项加厚（★ 不计分；默认不进入基础分）---------------------------------
+# ---- Observation extras (not part of base 100 by default) ---------------------
 
-DOM_SIZE_WARN = 1500  # 元素数超过此值给出提示
-IMG_SAMPLE = 12       # 抽样检查现代格式的 <img> 上限
+DOM_SIZE_WARN = 1500  # warn when estimated tag count exceeds this
+IMG_SAMPLE = 12       # max <img> sample for modern format check
 
 
 def check_obs_faq_visible(html, parser):
-    """页内可见 FAQ/问答（非仅 JSON-LD FAQPage）。"""
+    """Visible on-page FAQ/Q&A (not JSON-LD FAQPage alone)."""
     low = html.lower()
     hits = []
     if re.search(r"<details[\s>]", low) and re.search(r"<summary[\s>]", low):
@@ -1159,7 +1147,7 @@ def check_obs_faq_visible(html, parser):
 
 
 def check_obs_author_visible(html):
-    """可见作者或组织署名（非仅 schema）。"""
+    """Visible author/org byline (not schema alone)."""
     low = html.lower()
     hits = []
     if re.search(r"(itemprop|property|name)=[\"']author[\"']", low):
@@ -1176,7 +1164,7 @@ def check_obs_author_visible(html):
 
 
 def check_obs_date_granular(html, parser):
-    """可见完整更新日期（年月日）。"""
+    """Visible full update date (Y-M-D)."""
     times = [t for t in (parser.times or []) if t]
     full_dt = [t for t in times if re.search(r"20\d{2}-\d{2}-\d{2}", t)]
     text_hit = bool(re.search(r"20\d{2}\s*[年./\-]\s*\d{1,2}\s*[月./\-]?\s*\d{1,2}", html))
@@ -1186,7 +1174,7 @@ def check_obs_date_granular(html, parser):
 
 
 def check_obs_img_modern(parser):
-    """抽样图片是否 WebP/AVIF（提示，不计分）。"""
+    """Sample whether images use WebP/AVIF (hint, unscored)."""
     imgs = list(parser.imgs or [])[:IMG_SAMPLE]
     if not imgs:
         return _ok(True, "现代图片格式", "无 <img>，跳过", "P3")
@@ -1205,7 +1193,7 @@ def check_obs_img_modern(parser):
 
 
 def check_obs_dom_size(parser):
-    """DOM 元素数量阈值提示（提示，不计分）。"""
+    """DOM size threshold hint (unscored)."""
     total = sum(int(v or 0) for v in (parser.tag_counts or {}).values())
     ok = total <= DOM_SIZE_WARN
     ev = "估算标签出现合计=%d（告警线 %d）" % (total, DOM_SIZE_WARN)
@@ -1213,7 +1201,7 @@ def check_obs_dom_size(parser):
 
 
 def check_obs_title_length(parser):
-    """标题长度（CORE-02）：建议约 15–65 字符。"""
+    """Title length hint: about 15–65 characters."""
     title = (parser.title_text or "").strip()
     n = len(title)
     ok = 15 <= n <= 65
@@ -1222,7 +1210,7 @@ def check_obs_title_length(parser):
 
 
 def check_obs_meta_desc_length(parser):
-    """meta description 长度（CORE-04）：建议约 50–160 字符。"""
+    """Meta description length hint: about 50–160 characters."""
     desc = ""
     for m in parser.metas or []:
         name = (m.get("name") or m.get("property") or "").lower()
@@ -1241,7 +1229,7 @@ def check_obs_meta_desc_length(parser):
 
 
 def check_obs_favicon(parser):
-    """favicon（CORE-11）。"""
+    """Favicon present."""
     hits = []
     for lk in parser.links or []:
         rel = (lk.get("rel") or "").lower()
@@ -1254,7 +1242,7 @@ def check_obs_favicon(parser):
 
 
 def check_obs_heading_order(parser):
-    """标题层级是否乱跳（CONT-05）：不允许从 h1 直接跳到 h3+。"""
+    """Heading level jumps: do not skip from h1 straight to h3+."""
     levels = [lv for lv, _tx in (parser.headings or [])]
     if not levels:
         return _fail([], "标题层级连续", "未见 h1–h6", "P2")
@@ -1273,7 +1261,7 @@ def check_obs_heading_order(parser):
 
 
 def check_obs_question_headings(parser):
-    """问句型标题（CIT-05）：至少一条 h2–h6 含问号或疑问词。"""
+    """Question-style headings: at least one h2–h6 with ? or question words."""
     q_words = ("吗", "么", "何", "怎", "哪", "谁", "几", "是否", "what", "why", "how", "when", "where", "who", "which")
     hits = []
     for lv, tx in (parser.headings or []):
@@ -1288,7 +1276,7 @@ def check_obs_question_headings(parser):
 
 
 def check_obs_lazy_loading(parser):
-    """懒加载是否过早（IMG-05）：首部图片不宜 loading=lazy。"""
+    """Lazy-load placement: early images should not use loading=lazy."""
     imgs = list(parser.imgs or [])
     if not imgs:
         return _ok(True, "懒加载位置合理", "无 <img>", "P3")
@@ -1300,7 +1288,7 @@ def check_obs_lazy_loading(parser):
 
 
 def check_obs_script_budget(parser):
-    """外链脚本数 / 内联体积（PERF-14/15 合并观察）。"""
+    """External script count / inline size (observation)."""
     scripts = [s for s in (parser.scripts or []) if not s.get("jsonld")]
     external = [s for s in scripts if s.get("src")]
     inline_lens = [int(s.get("inline_len") or 0) for s in scripts if not s.get("src")]
@@ -1312,18 +1300,18 @@ def check_obs_script_budget(parser):
 
 
 def check_obs_llms_quality(ai_endpoints):
-    """llms.txt 质量（ACC-20）：存在且含标题或链接。"""
+    """llms.txt quality: present and structured (title/links)."""
     found = ai_endpoints.get("found") or []
     if "llms.txt" not in found:
         return _fail(False, "llms.txt 可用且有结构", "未检出 llms.txt", "P3")
-    # 端点检查只记有无；质量用 evidence 字符串兜底提示
+    # Endpoint check is presence-only; evidence string carries quality hints
     ev = ai_endpoints.get("evidence") or "llms.txt 已存在"
-    # 若仅存在，给通过但提示可加章节
+    # Presence alone passes; hint to add headings/links
     return _ok(True, "llms.txt 可用", ev + "（建议含 # 标题与页面链接）", "P3")
 
 
 def check_observe_extras(html, parser, ai_endpoints=None):
-    """观察加厚（不计分）。"""
+    """Observation extras (unscored)."""
     out = {
         "faq_visible": check_obs_faq_visible(html, parser),
         "author_visible": check_obs_author_visible(html),
@@ -1343,11 +1331,11 @@ def check_observe_extras(html, parser, ai_endpoints=None):
     return out
 
 
-# ---- geo.new 第三方审计（★ v9 新增：数据获取诊断节点）----------------------
+# ---- Optional geo.new third-party audit --------------------------------------
 
 GEO_NEW_API = "https://geo.new/api/v1/audits"
-# 复用同一会话：同站重复提交会"附加到进行中的运行/复用 1 小时内完成报告"，
-# 而不是被当作陌生会话限流（TARGET_COOLDOWN）。★ v9
+# Reuse one session so repeat submits attach/reuse recent runs,
+# instead of cold-session TARGET_COOLDOWN limits.
 _GEO_NEW_SESSION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".geo_new_session")
 
 
@@ -1371,23 +1359,19 @@ def _save_geo_new_session(session):
 
 
 def check_geo_new(url, wait=90, fresh=False):
-    """【数据获取诊断节点】调用 geo.new 公开 API 完成一次单页审计。
+    """Optional geo.new public API single-page audit (cross-check).
 
-    流程（对齐官方 /docs/api）：
-      POST /api/v1/audits {"url":...} → 202 {audit_id, session, snapshot_url, poll_after_seconds}
-      GET  snapshot_url (Authorization: Bearer <session>) → 200，读 status 直到 complete/partial/failed
-    关键：
-      · 首次无 token 请求**不发** Origin / Sec-Fetch-*（否则返回 ORIGIN_REJECTED）；
-      · **必须带 User-Agent**（否则被 Cloudflare Error 1010 拦截）；
-      · **持久化并复用 session**（`.geo_new_session`）——同站重复提交会复用/附加，
-        避免被当作陌生会话触发 TARGET_COOLDOWN（每 URL 5 分钟一次）。
-    免 key 匿名会话每小时 5 次审计；读报告免费。
-    网络：自动遵循标准代理环境变量（HTTPS_PROXY/https_proxy/ALL_PROXY）；
-    实测直连 geo.new 即通，默认无需代理，受限网络设 HTTPS_PROXY 即可。
+    Flow (public /docs/api):
+      POST /api/v1/audits {"url":...} → 202 {audit_id, session, snapshot_url, ...}
+      GET snapshot_url (Authorization: Bearer <session>) until complete/partial/failed
+    Notes:
+      · First tokenless request must omit Origin / Sec-Fetch-* (else ORIGIN_REJECTED).
+      · User-Agent required (Cloudflare Error 1010 otherwise).
+      · Persist/reuse `.geo_new_session` to avoid TARGET_COOLDOWN on repeats.
+    Anonymous rate limits apply; failures do not break the deterministic report.
+    Honours HTTPS_PROXY / https_proxy / ALL_PROXY when set.
 
-    返回 dict（失败不抛异常，主流程照常产出确定性报告）：
-      {enabled, ok, error, audit_id, report_url, status, score, grade, coverage,
-       categories[], platforms[], blockers[], open_count, top_actions[], connection{}, screenshot{}}
+    Returns a dict (never raises): audit_id, score, platforms, blockers, etc.
     """
     payload = {"url": url}
     if fresh:
@@ -1471,10 +1455,10 @@ def check_geo_new(url, wait=90, fresh=False):
 
 
 # ---------------------------------------------------------------------------
-# 评分（§一.4，0–100）与分级（§〇.2）
+# Scoring (0–100) and issue bands
 # ---------------------------------------------------------------------------
 
-# 内容加分池：每项 1 分，整池最多 5。站外指标不进池。
+# Content bonus pool: 1 point each, capped at 5. Off-site signals stay out.
 BONUS_POOL_KEYS = (
     "title_length", "meta_desc_length", "heading_order",
     "question_headings", "favicon", "lazy_loading", "script_budget",
@@ -1483,11 +1467,12 @@ BONUS_POOL_CAP = 5
 
 
 def compute_score(checks):
-    """五轴基础分（v11）。
+    """Five-axis base score (v11).
 
-    引用可达 28、结构化 18、内容可引用 24（含加分池最多 5）、
-    页内实体 18、技术与渲染 12。合计 100。
-    unknown 不进分子也不进分母。微调与 P0 封顶在 finalize_score()。
+    Citation 28, structured 18, citable 24 (bonus ≤5),
+    on-page entity 18, technical rendering 12. Total 100.
+    Unknown excluded from numerator and denominator.
+    Micro-adjust and P0 cap are applied in finalize_score().
     """
     items = []   # (label, max, earned, known)
 
@@ -1498,7 +1483,7 @@ def compute_score(checks):
     def kof(r):
         return bool((r or {}).get("known", True))
 
-    # 引用可达 28
+    # Citation reach 28
     cita = checks["robots"]["citation_allowed"]
     cita_ev = cita.get("evidence", "")
     if not kof(cita):
@@ -1518,7 +1503,7 @@ def compute_score(checks):
         (6 if (checks["sitemap"]["exists"]["status"] and checks["robots"]["sitemap"]["status"]) else 0),
         kof(checks["sitemap"]["exists"]) and kof(checks["robots"]["sitemap"]))
 
-    # 结构化 18（实体另轴）
+    # Structured data 18 (entity on its own axis)
     jl = checks["jsonld"]
     add("有 JSON-LD 且合法", 8, 8 if jl["status"] else 0, kof(jl))
     key_types = {"Organization", "WebSite", "Article", "Product", "BreadcrumbList", "BlogPosting"}
@@ -1527,7 +1512,7 @@ def compute_score(checks):
     all_types = " ".join(jl.get("types", []))
     add("问答 FAQPage/QAPage", 5, 5 if ("FAQPage" in all_types or "QAPage" in all_types) else 0, kof(jl))
 
-    # 内容可引用 19 + 加分池最多 5 = 24
+    # Citable content 19 + bonus pool ≤5 = 24
     c = checks["content"]
     add("答案前置/胶囊", 8, 8 if c["answer_first"]["status"] else 0, kof(c["answer_first"]))
     add("表格/外链", 6, 6 if c["table_links"]["status"] else 0, kof(c["table_links"]))
@@ -1547,7 +1532,7 @@ def compute_score(checks):
     else:
         pool_max = 0
 
-    # 页内实体 18
+    # On-page entity 18
     ent = checks.get("entity") or {}
     if ent:
         add("实体 Organization 声明", 4, 4 if ent["org"]["status"] else 0, kof(ent["org"]))
@@ -1563,7 +1548,7 @@ def compute_score(checks):
     if faq_vis:
         add("可见 FAQ/问答", 3, 3 if faq_vis.get("status") else 0, kof(faq_vis))
 
-    # 技术与渲染 12
+    # Technical rendering 12
     add("无嵌套文档", 3, 3 if checks["nested"]["status"] else 0, kof(checks["nested"]))
     add("语言声明", 2, 2 if checks["lang"]["status"] else 0, kof(checks["lang"]))
     add("canonical", 2, 2 if checks["canonical"]["status"] else 0, kof(checks["canonical"]))
@@ -1576,7 +1561,7 @@ def compute_score(checks):
     earned = sum(e for _, _, e, k in items if k)
     score = int(round(100.0 * earned / known_max)) if known_max else 0
     coverage = (known_max / 100.0) if known_max else 0.0
-    # 加分池权重随已知项收缩，total_max 可能小于 100；覆盖率仍按满轴 100 计已知权重。
+    # Bonus pool weight may shrink; coverage still uses known weight vs 100.
     if known_max > 100:
         known_max = 100
     coverage = (known_max / 100.0)
@@ -1590,15 +1575,10 @@ def compute_score(checks):
 
 
 def finalize_score(base_score, problems, checks):
-    """★ v10：在基础分上施加「微调项（±5）」与「P0 封顶」（§一.4 / §一.6）。
+    """Apply micro-adjust (±5) and P0 cap on the base score.
 
-    微调项：
-      · AI 发现端点（§三 S / §17.2）：已有 llms.txt / ai.* → 最多 +5；
-      · GEO 注入自查（§13.6）：命中 → −5。
-      （数值各自封顶，合计限制在 −5 ~ +5。）
-    P0 封顶（§一.6 铁律 3）：存在**未修复的 P0** 时，总分强制 ≤74（“及格”档），
-      不让小项把致命问题平均掉。
-    返回 (final_score, info)。
+    Micro-adjust: discovery endpoints up to +5; injection hit −5; combined ±5.
+    Any open P0 caps the final score at 74.
     """
     micro, details = 0, []
     ep = checks.get("ai_endpoints") or {}
@@ -1621,10 +1601,9 @@ def finalize_score(base_score, problems, checks):
 
 
 def score_band(score):
-    """分档（★ v8：对齐 geo.new 的 Poor/Fair/Good/Excellent 区间）。
+    """Score band label (excellent / good / pass / needs work).
 
-    geo.new 把 77 判为 Good，故本库同步把"良好"下移到 75，
-    避免同一分数在两个工具里给出矛盾的档位标签。
+    "Good" starts at 75 so public auditor band edges roughly align.
     """
     if score >= 90:
         return "优秀"
@@ -1636,9 +1615,9 @@ def score_band(score):
 
 
 def collect_problems(checks):
-    """汇总所有「已判定但未通过」项为问题列表（含等级），按 P0→P3 排序。
+    """Collect judged failures into a problem list, sorted P0→P3.
 
-    ★ v10：**unknown（无法判定）不算问题**，其项改由 meta.unknown 单列（§一.6）。
+    Unknown items are not problems; they go to meta.unknown instead.
     """
     order = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
     problems = []
@@ -1663,7 +1642,7 @@ def collect_problems(checks):
         r = checks.get(key)
         if failed(r):
             problems.append({"level": r["level"], "key": key, "desc": desc, "evidence": r["evidence"]})
-    # 子检查
+    # Sub-checks
     if failed(checks["robots"]["citation_allowed"]):
         ca = checks["robots"]["citation_allowed"]
         problems.append({"level": ca.get("level", "P0"), "key": "robots.citation",
@@ -1687,7 +1666,7 @@ def collect_problems(checks):
         r = checks["content"].get(k)
         if failed(r):
             problems.append({"level": r["level"], "key": "content." + k, "desc": desc, "evidence": r["evidence"]})
-    # 实体信号（★ v8 新增）
+    # Entity signals
     ent = checks.get("entity", {})
     for k, desc in (("org", "无 Organization 实体声明"),
                     ("sameas", "Organization 缺 sameAs 权威锚点"),
@@ -1696,25 +1675,25 @@ def collect_problems(checks):
         r = ent.get(k)
         if failed(r):
             problems.append({"level": r["level"], "key": "entity." + k, "desc": desc, "evidence": r["evidence"]})
-    # GEO 注入 / 隐藏文字自查（★ v10，§13.6）
+    # GEO injection / hidden-text self-check
     inj = checks.get("injection") or {}
     if inj.get("found"):
         problems.append({"level": "P2", "key": "injection",
-                         "desc": "疑似 GEO 注入 / 隐藏文字信号（§13.6 自查）",
+                         "desc": "疑似 GEO 注入 / 隐藏文字信号（自查）",
                          "evidence": inj.get("evidence", "")})
     problems.sort(key=lambda x: order.get(x["level"], 9))
     return problems
 
 
 def collect_unknown(meta, checks):
-    """★ v10：汇总「无法判定（unknown）」的项，供报告与 JSON 展示（§一.6）。"""
+    """Collect unknown items for report / JSON."""
     out = list(meta.get("unknown", []))
     for grp, key in (("robots", "citation_allowed"), ("robots", "sitemap"),
                      ("sitemap", "exists"), ("sitemap", "fresh")):
         r = (checks.get(grp) or {}).get(key)
         if r and not r.get("known", True):
             out.append("%s.%s" % (grp, key))
-    # ★ v11：顶层检测项若 unknown（如首页抓取失败）也一并单列
+    # Also list unknowns from observation extras
     for key in ("h1", "meta_in_body", "sec_headers", "lang", "semantic",
                 "canonical", "og", "jsonld", "nested"):
         r = checks.get(key)
@@ -1724,7 +1703,7 @@ def collect_unknown(meta, checks):
 
 
 # ---------------------------------------------------------------------------
-# 报告输出（Markdown，对齐 §十二 模板）
+# Markdown report output
 # ---------------------------------------------------------------------------
 
 def render_markdown(profile, checks, score, breakdown, problems, url_checked, meta=None, finfo=None):
@@ -1738,20 +1717,20 @@ def render_markdown(profile, checks, score, breakdown, problems, url_checked, me
     L.append("- 检测页面：`%s`" % url_checked)
     L.append("- 体检时间：%s" % datetime.datetime.now().strftime("%Y-%m-%d %H:%M"))
     L.append("- **得分：%d/100（%s）**" % (score, band))
-    # ★ v10：置信度门控 / P0 封顶 / 微调（§一.6）
+    # Confidence gating / P0 cap / micro-adjust
     cov = meta.get("coverage")
     if cov is not None:
         conf = "%.0f%%" % (cov * 100)
         note = "（正常）" if cov >= 0.7 else "（⚠️ 偏低：多项无法判定 → 结论置信度低）"
         L.append("- **结论置信度：%s**%s" % (conf, note))
     if finfo.get("capped_by_p0"):
-        L.append("- ⚠️ **总分已按 P0 封顶（§一.6）**：存在未修复 P0 → 上限 74（及格档）")
+        L.append("- ⚠️ **总分已按 P0 封顶**：存在未修复 P0 → 上限 74（及格档）")
         for d in finfo.get("p0", []):
             L.append("  - P0 未修复：%s" % d)
     if finfo.get("micro"):
         L.append("- 微调项：%+d 分（%s）" % (finfo["micro"], "；".join(finfo.get("micro_details", []))))
     L.append("")
-    L.append("> 判级标准见文档 §〇.2；评分口径见 §一.4；**置信度门控见 §一.6**；检测命令见 §五。")
+    L.append("> 评分与分级说明见 https://www.geohttp.com/method")
     L.append("")
     L.append("## A. 已做对")
     L.append("")
@@ -1763,7 +1742,7 @@ def render_markdown(profile, checks, score, breakdown, problems, url_checked, me
             good.append("- ✅ %s" % label)
     L.extend(good or ["- （无）"])
     L.append("")
-    # 未判定项（unknown）——既不计 0 也不计满分，单列（§一.6）
+    # Unknown items — neither 0 nor full points; listed separately
     unknown = meta.get("unknown", [])
     if unknown:
         L.append("> ⚪ **无法判定（unknown，不计 0 也不计满分）**：%s" % "、".join(unknown))
@@ -1790,11 +1769,11 @@ def render_markdown(profile, checks, score, breakdown, problems, url_checked, me
     base = meta.get("base_score", score)
     L.append("| **基础分合计（已判定项归一）** | **%d** |" % base)
     if finfo.get("micro"):
-        L.append("| 微调项（端点/注入，§一.4） | %+d |" % finfo["micro"])
+        L.append("| 微调项（端点/注入） | %+d |" % finfo["micro"])
     final_label = "**最终（P0 封顶）**" if finfo.get("capped_by_p0") else "**最终**"
     L.append("| %s | **%d** |" % (final_label, score))
     L.append("")
-    # D. 分平台就绪度（★ v8 新增，对齐 geo.new 的 Platform Readiness）
+    # D. Platform readiness matrix (display)
     plat = checks.get("platform")
     if plat:
         L.append("## D. 分平台就绪度（AI 可读性实测）")
@@ -1811,7 +1790,7 @@ def render_markdown(profile, checks, score, breakdown, problems, url_checked, me
                  "本表仅作展示，不重复计入 0–100 总分。")
         L.append("")
 
-    # E. 实体信号（★ v8 新增，对齐 geo.new 的 Entity Signals）
+    # E. Entity signals (display)
     ent = checks.get("entity") or {}
     if ent:
         L.append("## E. 实体信号（★ v8 新增，对齐 geo.new Entity Signals）")
@@ -1825,7 +1804,7 @@ def render_markdown(profile, checks, score, breakdown, problems, url_checked, me
                                            str(r.get("evidence", "")).replace("|", "\\|")))
         L.append("")
 
-    # G. AI 发现端点 / Agent-ready / 注入自查（★ v10 新增，§三 S / §17 / §13.6）
+    # G. AI discovery endpoints / agent-ready / injection self-check
     ep = checks.get("ai_endpoints") or {}
     ag = checks.get("agent_ready") or {}
     inj = checks.get("injection") or {}
@@ -1833,20 +1812,20 @@ def render_markdown(profile, checks, score, breakdown, problems, url_checked, me
         L.append("## G. AI 发现端点 · Agent-ready · 注入自查（★ v10 新增）")
         L.append("")
         if ep:
-            L.append("**① AI 发现端点（§三 S / §17.2）**：已有 %s ｜ 缺失 %s"
+            L.append("**① AI 发现端点**：已有 %s ｜ 缺失 %s"
                      % ("、".join(ep.get("found") or []) or "无",
                         "、".join(ep.get("missing") or []) or "无"))
             L.append("")
-            L.append("> `llms.txt` 等对 **Google 无益无害**（§16.2），但对 **agent / 其它系统** 有用；"
+            L.append("> `llms.txt` 等对 **Google 无益无害**，但对 **agent / 其它系统** 有用；"
                      "成本极低，属「低优先可做」。合计最多 **+5 分微调**。")
             L.append("")
         if ag:
             mark = "✅" if ag.get("ok") else "⚠️"
-            L.append("**② Agent-ready 轻检（§17.1）**：%s %s" % (mark, ag.get("evidence", "")))
+            L.append("**② Agent-ready 轻检**：%s %s" % (mark, ag.get("evidence", "")))
             L.append("")
         if inj:
             mark = "❌ 命中" if inj.get("found") else "✅ 未发现"
-            L.append("**③ GEO 注入 / 隐藏文字自查（§13.6）**：%s —— %s" % (mark, inj.get("evidence", "")))
+            L.append("**③ GEO 注入 / 隐藏文字自查**：%s —— %s" % (mark, inj.get("evidence", "")))
             L.append("")
             if inj.get("found"):
                 L.append("> ⚠️ 命中项会造成 AI 对整站的不信任，且可能来自广告位 / 第三方插件注入，"
@@ -1856,7 +1835,7 @@ def render_markdown(profile, checks, score, breakdown, problems, url_checked, me
 
 
 def render_geo_new(gn, our_score=None):
-    """渲染 geo.new 第三方审计节点（★ v9 新增）。gn 为 check_geo_new 的返回。"""
+    """Render optional geo.new third-party audit block."""
     L = []
     L.append("## F. geo.new 第三方审计节点（★ v9 新增）")
     L.append("")
@@ -1934,11 +1913,11 @@ def _check_labels(checks):
 
 
 # ---------------------------------------------------------------------------
-# 运行单个站点
+# Main flow: audit one site profile
 # ---------------------------------------------------------------------------
 
 def discover_content_url(base, home_html):
-    """从首页找一个内容页链接（帖子/文章），找不到则回退首页。"""
+    """Pick a content-page link (article/post) from the homepage when useful."""
     for pat in (r'href="([^"]*thread-\d+-1-1\.html)"', r'href="([^"]*/archiver/[^"]*)"',
                 r'href="([^"]*/\d{4}/\d{2}/[^"]+\.html)"', r'href="([^"]*/\?p=\d+)"'):
         m = re.search(pat, home_html, re.I)
@@ -1951,11 +1930,9 @@ def discover_content_url(base, home_html):
 
 
 def _origin(url):
-    """取 URL 的 scheme://host[:port]，用于 robots / sitemap 这类【根级】资源。
+    """Return scheme://host[:port] for root resources (robots/sitemap).
 
-    check_robots/check_sitemap 会把路径直接拼在入参后；若传入的是子路径页
-    （如 https://www.example.com/some-path），拼出的 .../some-path/robots.txt
-    会 404，误报「未放行/未声明 Sitemap」。故这两项必须用 origin。
+    Subpaths must not be used or .../path/robots.txt 404s falsely.
     """
     m = re.match(r"(https?://[^/]+)", url or "")
     return m.group(1) if m else (url or "").rstrip("/")
@@ -1968,8 +1945,8 @@ def run_site(profile):
     parser = parse_html(html)
     content_url = discover_content_url(base, html)
 
-    # 内容可引用性在"内容页"上评估更贴近本库（报价帖/文章页）；
-    # 若内容页与首页不同则单独抓一次，失败则回退首页。
+    # Prefer a content page for citable-content checks when homepage is thin
+    # Fetch that page if different from home; else fall back to home
     content_html, content_parser = html, parser
     if content_url != base:
         cr = fetch(content_url)
@@ -1984,7 +1961,7 @@ def run_site(profile):
         "sitemap": check_sitemap(_origin(base)),
         "ai_crawl": check_ai_crawler_reach(content_url),
     }
-    # 首页/内容页可解析（非连接层失败）时，才产出 HTML 派生检查；否则一律标 unknown（§一.6）
+    # HTML-derived checks only when the page body is available; else unknown
     home_ok = not _is_conn_error(home)
     if home_ok:
         checks.update({
@@ -2039,16 +2016,16 @@ def run_site(profile):
 
 
 # ---------------------------------------------------------------------------
-# 可选 AI 评审（按需复用 AI_fenxi.py，失败自动降级）
+# Optional AI review (loads a local helper if present; failures are soft)
 # ---------------------------------------------------------------------------
 
 def ai_review(result):
-    """把确定性检测结果交给 AI_fenxi 评审（可选）。失败不影响主流程。"""
+    """Optional local AI helper review. Failures do not affect the main flow."""
     try:
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from AI_fenxi import ai_fenxi  # 延迟导入：不用 --ai 时绝不加载
+        from AI_fenxi import ai_fenxi  # lazy import: only when --ai is set
     except Exception as e:
-        return "（AI 评审不可用：无法 import AI_fenxi —— %s）" % e
+        return "(optional AI helper unavailable: %s)" % e
     summary = {
         "站点": result["profile"].get("url"),
         "得分": result["score"],
@@ -2063,7 +2040,7 @@ def ai_review(result):
     r = ai_fenxi(prompt, system_prompt="你是严谨的中文网站 GEO 优化专家。")
     if r.get("success"):
         return r.get("content", "")
-    return "（AI 评审失败：%s）" % r.get("error", "未知错误")
+    return "(optional AI helper failed: %s)" % r.get("error", "unknown")
 
 
 # ---------------------------------------------------------------------------
@@ -2071,19 +2048,19 @@ def ai_review(result):
 # ---------------------------------------------------------------------------
 
 def main():
-    ap = argparse.ArgumentParser(description="网站 GEO 自动体检工具（线上：https://www.geohttp.com）")
-    ap.add_argument("--site", help="站点 URL，如 https://www.example.com/")
+    ap = argparse.ArgumentParser(description="GEO citation-readiness audit (live: https://www.geohttp.com)")
+    ap.add_argument("--site", help="Site URL, e.g. https://www.example.com/")
     ap.add_argument("--all", action="store_true",
-                    help="跑站点清单（默认示例；或 site_profiles.local.json / GEO_CHECK_SITES）")
-    ap.add_argument("--name", help="站点名（--site 时可选）")
-    ap.add_argument("--cms", default="未知", help="CMS 类型（--site 时可选）")
-    ap.add_argument("--json", action="store_true", help="输出 JSON（供程序消费）")
-    ap.add_argument("--out", help="把 Markdown 报告写入文件")
-    ap.add_argument("--ai", action="store_true", help="额外调用 AI_fenxi 做评审（可选，需 openai 库）")
+                    help="Run site list (demos, or site_profiles.local.json / GEO_CHECK_SITES)")
+    ap.add_argument("--name", help="Site name (optional with --site)")
+    ap.add_argument("--cms", default="unknown", help="CMS label (optional with --site)")
+    ap.add_argument("--json", action="store_true", help="Emit JSON")
+    ap.add_argument("--out", help="Write Markdown report to a file")
+    ap.add_argument("--ai", action="store_true", help="Optional local AI helper review (if installed)")
     ap.add_argument("--geo-new", action="store_true", dest="geo_new",
-                    help="调用 geo.new 公开 API 做第三方交叉验证（可选；免 key 每小时 5 次）")
+                    help="Optional geo.new public API cross-check")
     ap.add_argument("--geo-new-wait", type=int, default=90, dest="geo_new_wait",
-                    help="等待 geo.new 完成的秒数（默认 90；超时则仅报 audit_id 供后续读取）")
+                    help="Seconds to wait for geo.new (default 90)")
     args = ap.parse_args()
 
     if args.all:
@@ -2091,15 +2068,15 @@ def main():
     elif args.site:
         profiles = [{"name": args.name or args.site, "url": args.site, "cms": args.cms}]
     else:
-        ap.error("请指定 --site URL 或 --all")
+        ap.error("Specify --site URL or --all")
 
     all_results = []
     md_all = []
     for prof in profiles:
-        sys.stderr.write(">> 体检 %s ...\n" % prof.get("url"))
+        sys.stderr.write(">> auditing %s ...\n" % prof.get("url"))
         res = run_site(prof)
         if args.geo_new:
-            sys.stderr.write(">> geo.new 第三方审计（最多 %ds）...\n" % args.geo_new_wait)
+            sys.stderr.write(">> geo.new cross-check (max %ds)...\n" % args.geo_new_wait)
             res["geo_new"] = check_geo_new(res["url_checked"], wait=args.geo_new_wait)
         all_results.append(res)
         md = render_markdown(prof, res["checks"], res["score"], res["breakdown"],
@@ -2122,7 +2099,7 @@ def main():
                 "site": r["profile"], "url_checked": r["url_checked"],
                 "score": r["score"], "band": score_band(r["score"]),
                 "base_score": r.get("base_score", r["score"]),
-                # ★ v10 置信度门控（§一.6）：三态 / 覆盖率 / P0 封顶 / 微调
+                # Confidence gating: three-state / coverage / P0 cap / micro-adjust
                 "confidence": meta.get("coverage"),
                 "unknown": meta.get("unknown", []),
                 "capped_by_p0": finfo.get("capped_by_p0", False),
@@ -2142,7 +2119,7 @@ def main():
             f.write(out_md)
         sys.stderr.write(">> 报告已写入 %s\n" % args.out)
 
-    # 退出码：存在 P0 即返回 2（便于 cron/CI）
+    # Exit 2 when any P0 remains (cron/CI)
     has_p0 = any(any(p["level"] == "P0" for p in r["problems"]) for r in all_results)
     return 2 if has_p0 else 0
 
