@@ -107,22 +107,33 @@ AUTHORITATIVE_DOMAINS = (
     "github.com", "arxiv.org", "stackoverflow.com",
 )
 
-# 内置站点清单（--all 示例）。仅含公开 URL，不含服务器归属或本机路径。
+# --all 默认示例（公开演示站）。自有批量清单请放同目录 site_profiles.local.json，勿提交仓库。
 SITE_PROFILES = [
-    {"name": "hqbsh.com",  "url": "https://www.hqbsh.com/",  "cms": "Discuz! X5.0"},
-    {"name": "hqbnb.com",  "url": "https://www.hqbnb.com/",  "cms": "WordPress+SlimSEO"},
-    {"name": "mkcmd.com",  "url": "https://www.mkcmd.com/",  "cms": "WordPress+SlimSEO"},
-    {"name": "sj868.cn",   "url": "https://www.sj868.cn/",   "cms": "WordPress+SlimSEO"},
-    {"name": "szbjb.com",  "url": "https://www.szbjb.com/",  "cms": "WordPress+SlimSEO"},
-    {"name": "xgbjb.com",  "url": "https://www.xgbjb.com/",  "cms": "Discuz"},
-    {"name": "hqbsh.net",  "url": "https://www.hqbsh.net/",  "cms": "WordPress"},
-    {"name": "lecoo.cc",   "url": "https://www.lecoo.cc/",   "cms": "WordPress+SlimSEO"},
-    {"name": "openbjb.com", "url": "https://www.openbjb.com/", "cms": "WordPress"},
-    {"name": "sjpdd.com",  "url": "https://www.sjpdd.com/",  "cms": "WordPress"},
-    {"name": "lsdiy.com",  "url": "https://www.lsdiy.com/",  "cms": "自建(Laravel)"},
-    {"name": "lenovopc.net", "url": "https://www.lenovopc.net/", "cms": "PHP-FPM"},
-    {"name": "thinkpadpc.com", "url": "https://www.thinkpadpc.com/", "cms": "PHP-FPM"},
+    {"name": "example.com", "url": "https://www.example.com/", "cms": "example"},
+    {"name": "geohttp.com", "url": "https://www.geohttp.com/", "cms": "GEO Cool"},
 ]
+
+
+def load_site_profiles():
+    """优先读 GEO_CHECK_SITES 或 site_profiles.local.json；否则用内置示例。"""
+    candidates = []
+    env_path = (os.environ.get("GEO_CHECK_SITES") or "").strip()
+    if env_path:
+        candidates.append(env_path)
+    here = os.path.dirname(os.path.abspath(__file__))
+    candidates.append(os.path.join(here, "site_profiles.local.json"))
+    for path in candidates:
+        if not path or not os.path.isfile(path):
+            continue
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, list) and data:
+                return data
+        except Exception as exc:
+            sys.stderr.write("读取站点清单失败 %s: %s\n" % (path, exc))
+    return SITE_PROFILES
+
 
 TIMEOUT = 20
 
@@ -2060,9 +2071,10 @@ def ai_review(result):
 # ---------------------------------------------------------------------------
 
 def main():
-    ap = argparse.ArgumentParser(description="网站 GEO 自动体检工具（配套《网站geo爬虫友好化经验.md》）")
-    ap.add_argument("--site", help="站点 URL，如 https://www.hqbsh.com/")
-    ap.add_argument("--all", action="store_true", help="跑内置站点清单（§八）")
+    ap = argparse.ArgumentParser(description="网站 GEO 自动体检工具（线上：https://www.geohttp.com）")
+    ap.add_argument("--site", help="站点 URL，如 https://www.example.com/")
+    ap.add_argument("--all", action="store_true",
+                    help="跑站点清单（默认示例；或 site_profiles.local.json / GEO_CHECK_SITES）")
     ap.add_argument("--name", help="站点名（--site 时可选）")
     ap.add_argument("--cms", default="未知", help="CMS 类型（--site 时可选）")
     ap.add_argument("--json", action="store_true", help="输出 JSON（供程序消费）")
@@ -2075,7 +2087,7 @@ def main():
     args = ap.parse_args()
 
     if args.all:
-        profiles = SITE_PROFILES
+        profiles = load_site_profiles()
     elif args.site:
         profiles = [{"name": args.name or args.site, "url": args.site, "cms": args.cms}]
     else:
