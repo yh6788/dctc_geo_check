@@ -1,0 +1,6 @@
+# Private batch lists and local session cache — do not publish
+site_profiles.local.json
+.geo_new_session
+__pycache__/
+*.pyc
+.geo_new_session*
